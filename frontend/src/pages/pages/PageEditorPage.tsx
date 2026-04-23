@@ -1,13 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { deleteSitePage, getSitePage, movePage, publishPage, updateSitePage, getPartials } from '@/services/cmsApi';
-import { Box, Button, Grid, Paper, Switch, TextField, Typography, FormControlLabel, Dialog, DialogContent, DialogTitle, IconButton } from '@mui/material';
+import { Box, Button, Grid, Paper, Switch, Tab, Tabs, TextField, Typography, FormControlLabel, Dialog, DialogContent, DialogTitle, IconButton } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
 import { useToast } from '@/components/common/ToastProvider';
 import { useNavigate, useParams } from 'react-router-dom';
-import { useMemo, useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import ReactQuill from 'react-quill';
 import 'react-quill/dist/quill.snow.css';
 import { PagePreviewPage } from './PagePreviewPage';
+import { PageBuilder } from '@/components/page-builder/PageBuilder';
+import { blocksToHtmlWithMetadata, htmlToBlocks } from '@/utils/pageBuilderConverter';
+import { PageBlock } from '@/types/pageBuilder';
 
 export function PageEditorPage() {
   const { id = '' } = useParams();
@@ -23,8 +26,10 @@ export function PageEditorPage() {
   const [htmlMode, setHtmlMode] = useState(false);
   const [htmlRaw, setHtmlRaw] = useState('');
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [editorMode, setEditorMode] = useState<'quill' | 'page-builder'>('quill');
+  const [pageBuilderBlocks, setPageBuilderBlocks] = useState<PageBlock[]>([]);
 
-  useMemo(() => {
+  useEffect(() => {
     if (page) {
       setTitle(page.title);
       setSlug(page.path);
@@ -95,11 +100,70 @@ export function PageEditorPage() {
       <Grid container spacing={2}>
         <Grid item xs={12} md={8}>
           <Paper variant="outlined" sx={{ p: 2 }}>
-            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <Typography variant="subtitle1" sx={{ mb: 1 }}>Контент</Typography>
-              <FormControlLabel control={<Switch checked={htmlMode} onChange={(e)=>setHtmlMode(e.target.checked)} />} label="HTML" />
+            <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
+              <Typography variant="subtitle1">Контент</Typography>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                <Tabs
+                  value={editorMode}
+                  onChange={(_, v) => {
+                    if (!v) return;
+                    setEditorMode(v);
+                    if (v === 'page-builder' && html) {
+                      setPageBuilderBlocks(htmlToBlocks(html));
+                    }
+                    if (editorMode === 'page-builder' && v !== 'page-builder') {
+                      setHtml(blocksToHtmlWithMetadata(pageBuilderBlocks));
+                    }
+                  }}
+                  size="small"
+                >
+                  <Tab label="Quill" value="quill" />
+                  <Tab label="Page Builder" value="page-builder" />
+                </Tabs>
+                {editorMode === 'quill' && (
+                  <FormControlLabel control={<Switch checked={htmlMode} onChange={(e) => setHtmlMode(e.target.checked)} />} label="HTML" />
+                )}
+              </Box>
             </Box>
-            {htmlMode ? (
+            {editorMode === 'page-builder' ? (
+              <Box
+                sx={{
+                  position: 'fixed',
+                  top: 0,
+                  left: 0,
+                  right: 0,
+                  bottom: 0,
+                  zIndex: 1300,
+                  backgroundColor: '#fff',
+                }}
+              >
+                <PageBuilder
+                  key={id || 'page-builder'}
+                  pageId={id || 'new'}
+                  initialPage={{
+                    blocks: pageBuilderBlocks,
+                    title: title || 'Новая страница',
+                    slug: slug || '',
+                    settings: {
+                      id: id || '',
+                      title: title || '',
+                      slug: slug || '',
+                      description: '',
+                      keywords: '',
+                      robotsIndex: true,
+                      robotsFollow: true,
+                    },
+                    theme: {},
+                  }}
+                  onSave={(pageData) => {
+                    const htmlContent = blocksToHtmlWithMetadata(pageData.blocks);
+                    setHtml(htmlContent);
+                    setPageBuilderBlocks(pageData.blocks);
+                    showToast('Page Builder контент сохранен', 'success');
+                  }}
+                />
+              </Box>
+            ) : htmlMode ? (
               <TextField fullWidth multiline minRows={18} value={htmlRaw} onChange={(e)=>setHtmlRaw(e.target.value)} sx={{ fontFamily: 'monospace' }} />
             ) : (
               <ReactQuill
@@ -148,10 +212,14 @@ export function PageEditorPage() {
                 onClick={async () => {
                   try {
                     if (slug !== id) await moveMut.mutateAsync(slug);
-                    const contentToSave = htmlMode ? (() => {
-                      const m = htmlRaw.match(/<!--CONTENT_START-->([\s\S]*?)<!--CONTENT_END-->/);
-                      return m ? m[1].trim() : htmlRaw;
-                    })() : html;
+                    const contentToSave = editorMode === 'page-builder'
+                      ? blocksToHtmlWithMetadata(pageBuilderBlocks)
+                      : htmlMode
+                        ? (() => {
+                            const m = htmlRaw.match(/<!--CONTENT_START-->([\s\S]*?)<!--CONTENT_END-->/);
+                            return m ? m[1].trim() : htmlRaw;
+                          })()
+                        : html;
                     await mutation.mutateAsync({ title, html: contentToSave });
                     await publishMut.mutateAsync(published);
                   } catch (err: any) {
